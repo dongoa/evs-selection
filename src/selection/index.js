@@ -13,14 +13,14 @@ import selection_select from "./select.js";
 // import selection_node from "./node";
 // import selection_size from "./size";
 // import selection_empty from "./empty";
-// import selection_each from "./each";
-// import selection_attr from "./attr";
+import selection_each from "./each.js";
+import selection_attr from "./attr.js";
 // import selection_style from "./style";
 // import selection_property from "./property";
 // import selection_classed from "./classed";
 // import selection_text from "./text";
 // import selection_html from "./html";
-// import selection_raise from "./raise";
+import selection_raise from "./raise.js";
 // import selection_lower from "./lower";
 // import selection_append from "./append";
 // import selection_insert from "./insert";
@@ -58,14 +58,14 @@ Selection.prototype = selection.prototype = {
     // node: selection_node,
     // size: selection_size,
     // empty: selection_empty,
-    // each: selection_each,
-    // attr: selection_attr,
+    each: selection_each,
+    attr: selection_attr,
     // style: selection_style,
     // property: selection_property,
     // classed: selection_classed,
     // text: selection_text,
     // html: selection_html,
-    // raise: selection_raise,
+    raise: selection_raise,
     // lower: selection_lower,
     // append: selection_append,
     // insert: selection_insert,

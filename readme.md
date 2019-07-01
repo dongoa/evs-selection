@@ -14,7 +14,7 @@ p.style("color", "red");
 ```
 对于缩进控制，推荐使用选择器时使用两个缩进，设置属性方法时使用四个缩进，有助于解释代码：  
 ```
-d3.select("body")
+evs.select("body")
   .append("svg")
     .attr("width", 960)
     .attr("height", 500)
@@ -75,7 +75,7 @@ function selection() {
 }
 ```
 
-### d3.select(selector):  
+### evs.select(selector):  
 根据selector选择第一个匹配到的元素，没有返回空，匹配到多个返回第一个，使用方法如下：  
 ```
 const anchor = evs.select("a");
@@ -88,7 +88,7 @@ evs.selectAll("p").on("click", function() {
 ```
 *代码实现*：**select.js**：用document.querySelector封装了选择器，或者直接引入节点,\_parents默认为document.documentElement，引入节点时的parents为存在index.js中的root  
 
-###  d3.selectAll(selector) ：
+###  evs.selectAll(selector) ：
 选择匹配的所有元素,例如选择所有段落：  
 ```
 const paragraph = evs.selectAll("p");
@@ -197,15 +197,243 @@ export function styleValue(node, name) {
       || defaultView(node).getComputedStyle(node, null).getPropertyValue(name);
 }
 ```
-d3作者讲这部分代码整合在了selection.style(src/selection/style.js)属性的代码中。
+d3作者将这部分代码整合在了selection.style(src/selection/style.js)属性的代码中。
 
-
-# 总计：
+# 总结：
 到这里selcetion模块的**选择元素操作的方法就**结束了。这个模块代码文件个数非常多:结构分为两部分，一部分对外开放的接口放在src/中，一部分是内部的Selection对象的方法，放在src/selection/中，其模块的结构是这样的，selection模块，该模块寄生于一个(当前选择器为document,parents为空)Selection对象，他们共享原型方法，这也使得我们可以去修改原型添加方法，当我们使用该模块选择元素的时候，最开始肯定是要对整个文档进行选取，使用evs.select/evs.selectAll，然后在使用selection.select去选择。  
 **高层接口**：所以最基础的是四个方法，sev.select/selectAll是对整个文档选择，selection.select.selectAll是对已有的选择器再去嵌套选择，简单的选择操作使用这些结合选择器就够用了。  
-对于其中对外开放的**其他接口**，有2个对选择器进行的操作，合并merge和过滤filter，底层还开放出了evs.selector/selectorAll、matcher这样内部使用的闭包函数，及获取根节点的window和获取样式的style。为了不让文章过长这一部分就介绍这些。如果原理部分我的文字难已说明白还非常建议结合源码食用。
-
+对于其中对外开放的**其他接口**，有2个对选择器进行的操作，合并merge和过滤filter，底层还开放出了evs.selector/selectorAll、matcher这样内部使用的闭包函数，及获取根节点的window和获取样式的style。为了不让文章过长这一部分就介绍这些。如果原理部分我的文字难已说明白还非常建议结合源码食用[地址](https://github.com/dongoa/evs-selection)。  
+想这样一个问题，如果让你设计一个对元素进行选择的模块会怎么做？d3的作者就用嵌套选择和选择器结合的方法，就非常简单的4个api解决了这个问题，可以完成对任意元素或元素集的选取，虽然是对querySelector进行的封装，对于结果数组的结构和链式方法应用是不一样的。该部分内容我们可以了解到**链式调用的实现方法**、**闭包this的使用**、domAPI获取节点css属性及计算属性的api、以及模块设计模式，非常有益。  
 
 # 深度阅读：  
-Element.matches(selectorString)选择元素:https://developer.mozilla.org/zh-CN/docs/Web/API/Element/matches
-Window.getComputedStyle()计算后的css属性值：https://developer.mozilla.org/zh-CN/docs/Web/API/Window/getComputedStyle
+源码及解析：https://github.com/dongoa/evs-selection  
+Element.matches(selectorString)选择元素:https://developer.mozilla.org/zh-CN/docs/Web/API/Element/matches  
+Window.getComputedStyle()计算后的css属性值：https://developer.mozilla.org/zh-CN/docs/Web/API/Window/getComputedStyle  
+
+## 选择元素 
+选择元素后，设置文档的不同属性，例如设置a的name和color：  
+```
+evs.select("a")
+    .attr("name", "fred")
+    .style("color", "red");
+```
+可以直接去d3js.org官网在控制台中做实验。  
+### selection.attr(name[, value]) ：
+如果指定了value，则将为name的attribute设置为value，并返回选择器，value为常量，则对应属性都设置为该值，如果为函数，会传入数据(d)、索引(i)、当前节点(node)，使用返回值来设置属性，空值会删除对应属性。  
+如果未指定value，返回选择器中第一个非空元素的指定属性的值。  
+其中name可能会包含命名空间前缀，如xlink:href，参阅evs.spacenames，额外命名空间也可添加。  
+代码实现中，首先单个参数会直接返回对应属性，封装的getAttribute和getAttributeNS，传入两个参数时，value为null直接删除，封装removeAttribute，传入函数的情况又用到了闭包,在外部使用this.each(callback)传递。
+```
+function attrFunction(name, value) {
+    return function() {
+        var v = value.apply(this, arguments);
+        if (v == null) this.removeAttribute(name);
+        else this.setAttribute(name, v);
+    };
+}
+```
+### selection.classed(names[, value])  
+如果指定了value，在该选择器元素下可以将names添加或删除，修改classList属性吗，例如将类foo和bar添加到选择器。  
+```
+selection.classed("foo bar", true);
+```
+如果value为true，所有选择器中元素会添加指定的类，否则不会添加。若value为函数，计算返回值判断是否添加，例如foo类随机数大于0.5时添加  
+```
+selection.classed("foo", () => Math.random() > 0.5);
+```
+没指定value时，对第一个非空的节点进行判断，返回true或false。  
+代码实现中：防止不支持classList作者自定义了一个对象ClassList,以及对classList的添加删除包含操作，代码如下：  
+```
+function ClassList(node) {
+    this._node = node;
+    this._names = classArray(node.getAttribute("class") || "");
+}
+
+ClassList.prototype = {
+    add: function(name) {
+        var i = this._names.indexOf(name);
+        if (i < 0) {
+            this._names.push(name);
+            this._node.setAttribute("class", this._names.join(" "));
+        }
+    },
+    remove: function(name) {
+        var i = this._names.indexOf(name);
+        if (i >= 0) {
+            this._names.splice(i, 1);
+            this._node.setAttribute("class", this._names.join(" "));
+        }
+    },
+    contains: function(name) {
+        return this._names.indexOf(name) >= 0;
+    }
+};
+```
+### selection.style(name[, value[, priority]])  
+设置选择器元素的style属性，value为常数则全部设置为此值，同样可以为函数，按返回值设置是否添加该项，同时可以设置优先级null/important.  
+未指定value，返回第一个非空元素的属性，如果存在会先否会inline样式，否则返回计算样式。注意:svg中设置3px与3是不同的，某些浏览器会自动添加，ie不会。  
+代码实现同样用到了Selection的each每个元素进行操作，传入闭包函数。  
+```
+export default function(name, value, priority) {
+    return arguments.length > 1
+        ? this.each((value == null
+            ? styleRemove : typeof value === "function"//value传入null，将其style-name删除
+                ? styleFunction//传入函数
+                : styleConstant)(name, value, priority == null ? "" : priority))//常量时设置这个值
+        : styleValue(this.node(), name);//参数一个时返回其对应样式属性
+}
+```
+###  selection.property(name[, value])| selection.text([value])| selection.html([value])
+第一个方法对些些无法寻址找到的属性修改，如表单字段文本，checkbox的checked的boolean值。使用方法与selection.class相同，后面就是改变文本和html，实现上他们封装的方法分别是[]、textContent、innerHTML.  
+在d3中完全可以利用selection.append/insert去创建数据驱动的内部节点,该html方法是不支持svg的，可以尝试[XMLSerializer](https://developer.mozilla.org/en-US/docs/XMLSerializer)[innersvg polyfill](https://code.google.com/p/innersvg/)这两个方法使得innerHTML支持svg  
+*以上这些方法attr、classed、style、property、text、html，都是对selection的属性、文本、html进行更改*  
+###  selection.append(type) 
+如果type是字符串，为添加为选择器元素的最后一个子元素，或根据绑定的数据来添加元素(如果在enter selection中)，并可以通过selection.order调整顺序。  
+如果为函数，传入d,i,nodes，并将返回的节点作为添加元素，例如讲div添加到p中：  
+```
+d3.selectAll("p").append("div");//value为字符串
+d3.selectAll("p").append(() => document.createElement("div"));//value为函数
+```
+与下面结果相同：  
+```
+d3.selectAll("p").select(function() {
+  return this.appendChild(document.createElement("div"));
+});
+```
+这里也是支持包含命名空间的元素的情况。  
+源码部分使用了create去保存命名空间，或得到父节点的命名空间，然后调用selection.select(function):  
+```
+import creator from '../creator.js'
+
+export default function(name){
+    var create = typeof  name === "function" ? name:creator(name);//
+    return this.select(function(){
+        return this.appendChild(create.apply(this,arguments));//这里传出去的仍是闭包，相当于调用select(f)的arguments仍是在select.js中出入的
+    })
+}
+```
+### selection.insert(type[, before]) 
+type为字符串时，在指定的选择器before前添加元素，无before时为默认为null。  
+type和before也可以都是函数，type返回要出入的节点，before返回要插入元素的子元素，下面这个例子是向p中插入div。  
+```
+d3.selectAll("p").insert("div");
+d3.selectAll("p").insert(() => document.createElement("div"));//函数
+```
+效果与下面相同：  
+```
+d3.selectAll("p").select(function() {
+  return this.insertBefore(document.createElement("div"), null);
+});
+```
+返回值同样是新选择器以及具有一样的命名空间搜索与定义机制。其内部封装insertBefore，并且复用了selector。
+###  selection.remove() 
+删除文档中的当前这个选择器中的元素并返回，当前换没有api可以添加回dom，但是可以将返回值传给append、insert重新添加。  
+```
+function remove(){
+    var parent=this.parentNode;
+    if(parent) parent.removeChild(this);
+}
+export default function () {
+    return this.each(remove);
+}
+```
+代码实现中通过获取父节点，删除该子节点，调用each为每个元素执行该方法，each的返回值正好是元素。  
+### selection.clone([deep]) 
+向选择器插入当前选择器的克隆，返回添加后的选择器，deep为真时也会克隆后代节点。  
+其代码实现封装了cloneNode(true/flase).  
+###  selection.sort(compare)  
+根据compare函数对选择器中元素的拷贝的**数据**排序，后返回新选择器，默认为升序。源码如下：   
+```
+export default function (compare) {
+    if(!compare) compare=ascending;
+    function compareNode(a,b){
+        return a && b ? compare(a.__data__,b.__data__):!a-!b;
+    }
+    for(var groups=this._groups,m=groups.length,sortgroups=new Array(m),j=0;j<m;++j){
+        for(var group=groups[j],n=group.length,sortgroup=sortgroups[j]=new Array(n),node,i=0;i<n;i++){
+            if(node=group[i]){
+                sortgroup[i]=node;
+            }
+        }
+        sortgroup.sort(compareNode);
+    }
+    return new Selection(sortgroups,this._parents).oder();
+}
+function ascending(a,b){
+    return a<b?-1:a>b?1:a>=b?0:NaN;
+}
+```
+排序函数值红处理空值的函数非常简洁!a-!b保持原来的节点顺序，最后返回时应用order方法，因为这里只是在选择器中数据排序，并没有应用到文档上。  
+### selection.order() 
+将元素重新插入doucment,相当于调用selection.sort,如果已经排序，速度快很多。  
+```
+export default function () {
+    for(var groups = this._proups,j=-1,m=gourps.length;++j<m;){
+        for(var group=groups[j],i=group.length-1,next=group[i],node;--i>=0;){
+            if(node=group[i]){
+                if(next && node.compareDocumentPosition(next)^4) next.parentNode.insertBefore(node,next);
+                    next=node;
+                    //这里使用compareDocumentPosition判断node只要不是next的子节点，这里感觉换是有点绕的
+                //首先group中保存需要拍好的顺序，需要的就是将真实document节点按照这个顺序去拍，只用了n的复杂度，从后往前将每个相邻的节点的顺序排正，
+                //注意next.parentNode.insertBefore(node,next)是真正在改变节点顺序，其他都只是读取数组值
+            }
+        }
+    }
+}
+```
+### selection.raise()
+重新插入元素，作为父节点的最后一个子节点，内部使用each方法添加子节点，与下面结果一致：  
+```
+selection.each(function() {
+  this.parentNode.appendChild(this);
+});
+```
+### selection.lower() 
+与上面相反，添加为父节点的第一个孩子。相当于  
+```
+selection.each(function() {
+  this.parentNode.insertBefore(this, this.parentNode.firstChild);
+});
+```
+### d3.create(name) 
+创建一个docuemnt下的分离元素name.内部使用select创建，因为返回的是匿名函数，this为其调用时的
+开始看还很纠结，他没有删除原节点，怎么又添加了一遍，但appenChild的dom操作是直接把节点移动到最后了。  
+###  d3.creator(name)
+创建一个元素，实际上就是封装了createElement/NS,组合了命名空间，下面用法相同：   
+```
+selection.append("div");
+selection.append(d3.creator("div"));
+```
+## 命名空间namespace
+XML中使用相同元素时是需要添加命名空间的。否则会造成冲突，元素的命名空间格式为\<h:table\>,不同的类型也有不同的默认空间，见evs.namespace   
+```
+xmlns="namespaceURI"
+```
+### evs.namespace(name)  
+根据name判断该名称有没有命名空间，如果包含冒号，冒号前解析为空间前缀，后面解析为本地属性，只要该前缀在evs.namespaces中注册了，就会返回
+```
+d3.namespace("svg:text"); // {space: "http://www.w3.org/2000/svg", local: "text"}
+```
+这里xmlns比较特殊，因为xmlns属性可以在文档中定义一个或多个可供选择的命名空间，所以如果是xmlns，也会返回name不含冒号，也会直接返回名称。
+### ves.namespaces 
+已注册名称命名空间的映射。 初始值是：  
+```
+{
+  svg: "http://www.w3.org/2000/svg",
+  xhtml: "http://www.w3.org/1999/xhtml",
+  xlink: "http://www.w3.org/1999/xlink",
+  xml: "http://www.w3.org/XML/1998/namespace",
+  xmlns: "http://www.w3.org/2000/xmlns/"
+}
+```
+# 总结
+到这里完成了对元素进行修改的selection部分以及命名空间的两个方法，我把对选择器的操作所有方法分为两部分，第一部分是对选择器中元素属性的操作，attr、classed、style、property、text、html，第二部分是对这些元素的node节点进行操作，append、insert、remove、clone、sort、order、raise、lower、create、creator，其中大部分还是对domAPI的封装，比如createElement、appendChild等等。能让我方便的以数据驱动的方式设置属性和操作节点增删改查创建排序等等。   
+简单使用时最频繁的还是attr、style、text以及append，设置节点的属性,以及向选择器中添加节点，就能解决大多数问题。  
+# 深度阅读：  
+源码及解析：https://github.com/dongoa/evs-selection  
+XML命名空间：http://www.w3school.com.cn/xml/xml_namespaces.asp  
+DOM classList属性： https://www.runoob.com/jsref/prop-element-classlist.html  
+HTML attribute和property的区别：https://segmentfault.com/a/1190000008781121?utm_source=tag-newest
+JS判断类型4种方法：https://www.cnblogs.com/onepixel/p/5126046.html  
+Node.compareDocumentPosition():
+https://developer.mozilla.org/en-US/docs/Web/API/Node/compareDocumentPosition  
