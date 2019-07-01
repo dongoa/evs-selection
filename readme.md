@@ -435,5 +435,287 @@ XML命名空间：http://www.w3school.com.cn/xml/xml_namespaces.asp
 DOM classList属性： https://www.runoob.com/jsref/prop-element-classlist.html  
 HTML attribute和property的区别：https://segmentfault.com/a/1190000008781121?utm_source=tag-newest
 JS判断类型4种方法：https://www.cnblogs.com/onepixel/p/5126046.html  
-Node.compareDocumentPosition():
-https://developer.mozilla.org/en-US/docs/Web/API/Node/compareDocumentPosition  
+Node.compareDocumentPosition():https://developer.mozilla.org/en-US/docs/Web/API/Node/compareDocumentPosition  
+
+## 添加数据
+这部分开始介绍Join，讲解的两个文章[selection.join notebook](https://observablehq.com/@d3/selection-join)[Thinking With Joins](https://bost.ocks.org/mike/join/)  
+### selection.data([data[, key]])  
+讲述数据数组绑定到元素上，返回绑定成功的selection表示update状态，同时也定义了enter，exit状态在返回的选择器上，数据可以为任意数组(数字，对象数组...)或者一个返回数组函数，存储在选择器的__data__属性中，从而使数据具有“粘滞性”。  
+结合join、enter、exit、append、remove，可以以数据驱动的方式添加、更新、删除元素，如下例子从matrix中创建html：  
+```
+const matrix = [
+  [11975,  5871, 8916, 2868],
+  [ 1951, 10048, 2060, 6171],
+  [ 8010, 16145, 8090, 8045],
+  [ 1013,   990,  940, 6907]
+];
+evs.select("body")
+  .append("table")
+  .selectAll("tr")
+  .data(matrix)
+  .join("tr")
+  .selectAll("td")
+  .data(d => d)
+  .join("td")
+    .text(d => d);
+```
+再该例子中，通过matrix的长度添加table行数。 
+如果没有指定key，则按数本身据顺序进行添加，如果key为函数，为每个元素执行该函数返回的字符串添加为当前元素(这里就只源码中的keyValue，类似于一个标记位)，并把数据节点合并到enter中。  
+**data源码解析**如果只看文档真是一头雾水，这里设计的原则就是为选择器添加了几个数组类属性，目前现在可以理解为data、enter、update、exit，当我们data一个数据的时候，会先根据data中的数据分别向这三个数组中添加元素，数据驱动的含义也在这里，update为更新过的数组，即原来的该节点的数据中和新加入的data冲突了，更新原来已有的节点已绑定数据的数据，enter就是data中去掉了更新的那部分剩余的数据，相当于添加新元素节点，exit会存放哪些无法与数据匹配上的，或数据长度就那么多，多余出来的原先存在的节点，相当于删除掉哪些节点了。当然最后作者删掉了update，因为这只是一个过程变量，不需要进行存储了。  
+你可以简单理解为enter会向原节点添加进去绑定数据，以方便以该数据驱动添加节点，exit数组存储的则为删除与数据不匹配的节点，update就是最后的返回值。源代码：不想看就跳过，但我觉着看一下代码就豁然开朗了：  
+```
+import {Selection} from "./index.js";
+import {EnterNode} from "./enter.js";
+import constant from '../constant.js';
+
+var keyPrefix='$'; //防止像__proto__这样的key
+//不输入key的情况
+function bindIndex(parent,group,enter,update,exit,data){
+    var i=0,
+        node,
+        groupLength=group.length,
+        dataLength=data.length;
+    //这里处理可以添加数据的元素，即按传入数据data的长度向元素添加数据
+    //把非空节点加入update,所以这里update的含义可以说是可以被更新的节点数组
+    //把空节点加入enter
+    for(;i<dataLength;++i){
+        if(node=group[i]){
+            node.__data__ = data[i];
+            update[i]=node;
+        }else{
+            enter[i]=new EnterNode(parent,data[i]);
+        }
+    }
+
+    //多余的不能添加数据的节点在这里处理。加入exit
+    for(;i<groupLength;++i){
+        if(node = group[i]){
+            exit[i]=node;
+        }
+    }
+}
+//key函数输入的情况
+function bindKey(parent,group,enter,update,exit,data,key){
+    var i,
+        node,
+        nodeByKeyValue={},//判重的hash集
+        groupLength=group.length,
+        dataLength=data.length,
+        keyValues=new Array(groupLength),
+        keyValue;
+
+    //这里就是计算原始节点数组的调用key函数返回值情况，多余的valuekey加入exit
+    //为每个节点计算key值
+    //如果多个节点具有相同的key，将重复的加入exit
+    for(i=0;i<groupLength;++i){
+        if(node=group[i]){
+            keyValues[i]=keyValue=keyPrefix+key.call(node,node.__data__,i,group);
+            if(keyValue in nodeByKeyValue){
+                exit[i]=node;
+            }else {
+                nodeByKeyValue[keyValue]=node;
+            }
+        }
+    }
+    //计算新加入的data，有哪些原始绑定的数据需要更改(update
+    // 的含义就是to update)
+    //使用key函数处理datum
+    //如果已经存在节点与这个key关联，将其加入update
+    //如果没有，或key重复，加入enter
+    for(i=0;i<dataLength;++i){
+        keyValue=keyPrefix+key.call(parent,data[i],i,data);
+        if(node = nodeByKeyValue[keyValue]){
+            update[i]=node;
+            node.__data__=data[i];//to update
+            nodeByKeyValue[keyValue]=null;//加入update后就删除了，重复的会到enter中
+        }else{
+            enter[i]=new EnterNode(parent,data[i]);
+        }
+    }
+    //将剩余没绑定数据的节点放入exit
+    for(i=0;i<groupLength;++i){
+        if((node=group[i])&&(nodeByKeyValue[keyValues[i]]===node)){
+            //这里计算如果原始节点调用key函数得到的valuekey中
+            // 也有可能出现与新加入的data调用key函数后得到的keyvalue重复的情况，
+            //就将其加入exit
+            exit[i]=node;
+        }
+    }
+}
+export default function (value,key) {
+    if(!value){//不传入value的情况下，返回节点上绑定的数据
+        data=new Array(this.size()),j=-1;
+        this.each(function(d){ data[++j]=d; });//each中的callback:callback.call(node,node.__data__,i,group);
+        return data;
+    }
+    var bind=key?bindKey:bindIndex,
+        parents=this._parents,
+        groups=this._groups;
+    if(typeof value !== "function") value=constant(value);
+        //这里就把3种状态定义好了，其实就在添加了这么3个数组、enter、update、exit、data里面保存原始数据
+    for(var m=groups.length,update=new Array(m),enter=new Array(m),exit=new Array(m),j=0;j<m;++j){
+        var parent=parents[j],
+            group=groups[j],
+            groupLength=group.length,
+            data=value.call(parent,parent&&parent.__data__,j,parents),
+            dataLength=data.length,
+            enterGroup=enter[j]=new Array(dataLength),
+            updateGroup=update[j]=new Array(dataLength),
+            exitGroup=exit[j]=new Array(groupLength);
+
+        bind(parent,group,enterGroup,updateGroup,enterGroup,data,key);
+
+        //现在可以做的就是将enter内的节点加入到update中
+        //
+        for(var i0=0,i1=0,previous,next;i0<dataLength;++i0){
+            if(previous = enterGroup[i0]){
+                if(i0 >= i1) i1=i0+1;//设置i1的初始值
+                while(!(next = updateGroup[i1]) && ++i1 < dataLength) ;
+                previous._next = next || null;
+            }
+        }
+
+    }
+
+    update=new Selectoin(update,parent);
+    update._enter = enter;
+    update._exit=exit;
+    return update;
+}
+```  
+例如这个文档：  
+```
+<div id="Ford"></div>
+<div id="Jarrah"></div>
+<div id="Kwon"></div>
+<div id="Locke"></div>
+<div id="Reyes"></div>
+<div id="Shephard"></div>
+```
+通过key函数添加数据：  
+```
+const data = [
+  {name: "Locke", number: 4},
+  {name: "Reyes", number: 8},
+  {name: "Ford", number: 15},
+  {name: "Jarrah", number: 16},
+  {name: "Shephard", number: 23},
+  {name: "Kwon", number: 42}
+];
+d3.selectAll("div")
+  .data(data, function(d) { return d ? d.name : this.id; })
+    .text(d => d.number);
+
+```
+key函数通过判断d是否存在，返回name或id，以为当前选择器元素没有绑定过数据，元素上的数据(datum)即上面代码证d为空，如果元素绑定过了数据，则d为费空。  
+更新(update)和添加(enter)以数据顺序进行，删除状态(exit)保留原有的顺序，也许在指定了key时选择器中的元素顺序与文档中的元素顺序不一致，此时需要用前面提到的selection.order或sort对文档排序，关于key函数的更多理解[Let’s Make a Bar Chart, II](https://bost.ocks.org/mike/bar/2/)[Object Constancy](https://bost.ocks.org/mike/constancy/)  
+如果没有指定data，则返回选择器元素的数据数组，该方法不能用来清除绑定数据，使用selection.datum.  
+### selection.join(enter[, update][, exit]) 
+根据之前绑定的数据data，对元素添加、删除、重新排序，是enter、exit、append、remove、oreder的显示替换。代码实现也是封装的这些函数。用法如下  
+```
+svg.selectAll("circle")
+  .data(data)
+  .join("circle")
+    .attr("fill", "none")
+    .attr("stroke", "black");
+```
+并且可以传入函数控制每个操作：  
+```
+svg.selectAll("circle")
+  .data(data)
+  .join(
+    enter => enter.append("circle").attr("fill", "green"),
+    update => update.attr("fill", "blue")
+  )
+    .attr("stroke", "black");
+```
+换可以通过第三个函数删除，返回值会合并enter和update并返回通过分隔enter和update，以及在data中添加key函数，可以最小化对dom的更改以优化性能。  
+还可以通过在enter、update、exit中创建过渡来设置动画，为避免破坏方法链用selection.call创建过渡,或返回一个未定义的enter、update组织合并。  
+### selection.enter() 
+返回选择器的enter状态，对于每个绑定好的数据(datum)没有对应DOM元素的占位符节点，如果没有selection.data掉用后使用，返回值为空。  
+选择器的enter状态通常用于创建与新数据缺失的元素，如下根据数组数据创建div：  
+```
+const div = d3.select("body")
+  .selectAll("div")
+  .data([4, 8, 15, 16, 23, 42])
+  .enter().append("div")
+    .text(d => d);
+```
+如果body为空，该程序会创建6个div，根据数组数据的顺序，将其文本内容指定为关联数据(强制为字符串类型)。  
+```
+<div>4</div>
+<div>8</div>
+<div>15</div>
+<div>16</div>
+<div>23</div>
+<div>42</div>
+```
+从概念上讲，enter桩体的占位符是指向父元素的指针(上面例子中为body)，该方法通常用于添加元素，添加后与update状态的选择器合并，使得应用于enter和update两个状态。  
+enter的实现原理是在enter.js中定义了一个enterNode对象，给选择器添加这个对象，前面提到的进入enter状态，就是返回一个新的选择器，这个选择器构造是传入的是上一条链路选择器的.\_enter,及其父节点。源码如下   
+```
+import sparse from './sparse.js'
+import {Selection} from '.index.js'
+
+export default function () {
+    return new Selection(this._enter || this._groups.map(sparse),this._parents);
+}
+//在这里定义了enternode对象 这里也是构造函数加原型模式
+export function EnterNode(parent,datum) {
+    this.ownerDocument = parent.ownerDocument;
+    this.namespaceURI=parent.namespaceURI;
+    this._next = null;
+    this._parent = parent;
+    this.__data__=datum;
+}
+EnterNode.prototype={
+    constructor:EnterNode,
+    appendChild:function(child){  return this._parent.insertBefore(child, this._next); },
+    insertBefore:function(child,next){ return this._parent.insertBefore(child,next); },
+    querySelector:function(selector){ return this._parent.querySelector(selector); },
+    querySelectorAll:function(selector) { return this._parent.querySelectorAll(selector); }
+};
+```
+### selection.exit() 
+返回删除的selection元素，文档中没有被添加数据的节点。通常用于添加新数组前删除旧数据与多余元素。  
+```
+div = div.data([1, 2, 4, 8, 16, 32], d => d);
+```
+data操作根据前面enter中的数据已经传入了[4, 8, 15, 16, 23, 42]，新数据重复的有4,8,16，因此update这三个，可以使用enter添加1,2,32三个新元素。  
+```
+div.enter().append("div").text(d => d);
+```
+删除旧数据中的15,23,42：  
+```
+div.exit().remove();
+```
+现在文档是这样：  
+```
+<div>1</div>
+<div>2</div>
+<div>4</div>
+<div>8</div>
+<div>16</div>
+<div>32</div>
+```
+这里DOM的顺序与数据一致因为新旧数据都是一样的顺序，如果新加入的顺序不同，使用selection.order重新排序。  
+### selection.datum([value]) 
+获取或设置每个元素的绑定数据，这种方法不selection.data不同。不会join，也不影响enter和exit，其内部实现实际上是this.node().\_\_data\_\_直接获取或设置数据。  
+在指定了value的情况下，如果是常量则赋值，函数的话返回值设置为数据(在每个节点上数据绑定的名称为\_\_data\_\_)，为null会删除该元素绑定的数据。  
+如果没有指定值，返回第一个非空节点绑定的数据，这在只有一个节点时很有用，  
+此方法在对于H5中的自定义属性非常有效，例如给定如下元素：  
+```
+<ul id="list">
+  <li data-username="shawnbot">Shawn Allen</li>
+  <li data-username="mbostock">Mike Bostock</li>
+</ul>
+```
+通过此方法将元素上绑定的数据设置为内置dataset属性。  
+```
+selection.datum(function() { return this.dataset; })
+```
+# 总结
+这一份是对数据绑定原理的解析，以及数据的几个状态，当我们分析数据时，最有效的几个操作添加数据、删除数据、更新数据，d3的作者用这几个简答的api全部解答了，换绑定到了dom上，使得dom可以根据数据进行同样的添加删除更新。其中基本的原理还视在selection对象上，我们给selection添加了这么几个属性enter(存储添加元素的数据节点数组)、exit(存储删除了的节点数组)、update(这个是根据新数据更新的数据绑定的节点数组)以及__data__(单个节点上的数据属性，保存数据内容)。这几个api中，data是必须的，data后可以对selectin进行enter、exit操作，以及datum查看或设置data值，以及一个抽象出来的join函数，简化enter、exit操作优化了速度。  
+高层接口：在我使用时就可以直接使用data.enter.进行数据绑定，其他操作在需要时添加即可。
+# 深度阅读：  
+源码及解析：https://github.com/dongoa/evs-selection 
+点个赞再走！
