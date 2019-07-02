@@ -719,3 +719,203 @@ selection.datum(function() { return this.dataset; })
 # 深度阅读：  
 源码及解析：https://github.com/dongoa/evs-selection 
 点个赞再走！
+
+## 事件处理  
+出于交互考虑，selection支持监听(listening)和分派(dispatching)事件。  
+### selection.on(typenames[, listener[, options]]) 
+根据typenames向元素添加或删除事件监听，类型为字符串如click、mouseover、[DOM event type](https://developer.mozilla.org/en-US/docs/Web/Events#Standard_events)都支持，可以通过click.foo添加回调函数，多个name用空格分隔。  
+当一个事件分派到元素上，lisetener总是会看到最后的数据，如果之前已经绑定了事件会更新事件，传入null删除事件，.foo删除所有监听。  
+option设置监听器的特性，capturing还是passive，详情查看[addEventListener](https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener)  
+未指定监听器时会返回监听器(第一个)。  
+源码实现中给selection添加了一个__on的数组对象存储事件，并区分了事件类型进行调用filterContextListener/contextListener,首先解析typenames,然后根据参数去判断添加删除  
+```
+export default function (typename,value,capture) {
+    var typenames = parseTypenames(typename + ""),i,n=typenames.length,t;//解析typename字符串
+    if(arguments.length < 2){//一个参数返回,查找对应的事件的value
+        var on=this.node().__on;
+        if(on) for(var j=0,m=on.length,o;j<m;++j){
+            for(i=0,o=on[j];i<n;++i){
+                if((t=typenames[i]).type === o.type && t.name === o.name){
+                    return o.value;
+                }
+            }
+        }
+        return ;
+    }
+    //2个及以上参数的情况
+    on = value?onAdd :  onRemove;//这里判断value为null时删除否则添加事件
+    if(capture == null) capture =false;
+    for(i=0;i<n;i++) this.each(on(typenames[i],value,capture));//这里对每个typename查找一次，效率比较低，n*n
+    return this;
+
+}
+```
+### selection.dispatch(type[, parameters])  
+按顺序将指定类型的自定义事件发送到元素，parameters有这几个选项，bubbles，反向树的顺序即冒泡事件，cancelable，event.preventDefault阻止事件传播，detail，关联自定义数据，如果是个函数计算后返回上述选项。  
+代码实现上使用CustomEvent、createEvent、initEvent创建自定义事件。  
+```
+function dispatchEvent(node,type,params) {
+    var window = defaultView(node),
+        event=window.CustomEvent;
+    if(typeof event === "function"){
+        event = new event(type,params);//>>>
+    }else{
+        event = window.document.createEvent("Event");
+        if(params) event.initEvent(type,params.bubbles,params.cancelable),event.detail=params.detail;
+        else event.initEvent(type,false,false);
+    }
+    node.dispatchEvent(event);
+}
+```
+### d3.event
+保存当前的事件(存在时)，这是在调用监听器时设置并在终止后重置，使用此选项可以访问标准事件字段如[ event.timeStamp](https://www.w3.org/TR/dom/#dom-event-timestamp)[ event.preventDefault](https://www.w3.org/TR/dom/#dom-event-preventdefault),虽然可以使用event.pageX,event.pageY,但使用d3.mouse,d3.touch,d3.touches,转化为本地坐标更容易。  
+### d3.customEvent(event, listener[, that[, arguments]]) 
+使用that作为this传入arguments参数调用event事件，在调用期间，d3.event设置为指定事件，函数返回后回调，此外，将event.sourceEvent设为先前的d3.event，允许用户自定义事件对原生事件的引用，返回listener返回的值。  
+源码d3.event就是存储在on.js中的一个变量，回调的这种方式不会影响原来的值；  
+```
+export function customEvent(event1,listener,that,args) {
+    var event0=event;
+    event1.sourceEvent=event;//sourceEvent作者定义的事件层级，返回最顶端的事件
+    event=event1;
+    try{
+        return listener.apply(that,args);
+    }finally {
+        event=event0;
+    }
+}
+```
+### d3.mouse(container)   
+返回当前事件对应容器(HTML或SVG元素)的[x,y]坐标，点击后的坐标位置转换方法如下(point.js)  
+```
+export default function (node, event) {
+    var svg=node.ownerSVGElement || node;
+
+    if(svg.createSVGPoint){
+        var point=svg.createSVGPoint();
+        point.x  =event.clientX, point.y=event.clientY;
+        point = point.matrixTransform(node.getScreenCTM().inverse());
+        return [point.x,point.y];
+    }
+    var rect=node.getBoundingClientRect();
+    return [event.clientX - rect.left - node.clientLeft,event.clientY-rect.top-node.clientTop];
+}
+```
+### d3.touch(container[, touches], identifier)  
+返回指定识别码identifier容器下的触摸坐标[x,y],如果在指定identifier下touch事件，返回null，这对于忽略在触摸移动实践中只有部分触摸移动的情况非常有效，默认为changeTouches。  
+代码实现中利用changeTouches，去寻找指定的事件点发生的位置。  
+### d3.touches(container[, touches]) 
+以双元数组形式返回触摸事件点[[x1, y1], [x2, y2], …]。  
+### d3.clientPoint(container, event)
+返回指定事件相对于容器的坐标[x,y],如上面(point.js)  
+
+## 控制流
+对于高级用法，selections提供了用户自定义控制流的方法。  
+### selection.each(function)
+类似于数组的each，为每个元素调用function，代码实现当然为selection自己的数据结构而配置的。对于创建同时访问父元素和子元素上下文非常有用。    
+```
+parent.each(function(p, j) {
+  d3.select(this)
+    .selectAll(".child")
+      .text(d => `child ${d.name} of ${p.name}`);
+});
+```
+稍微分析一下，this是parent的上下文，我们再去选择chiild此时text中的d的this就成了孩子节点的上下文，在此同时也是可以访问p.namem,就达到同时访问的目的了。  
+### selection.call(function[, arguments…])
+调用指定函数一次，传入参数返回selection，相当于手动调用函数，但这个方法支持链式调用，例如下面可重用的设置样式的函数：  
+```
+function name(selection, first, last) {
+  selection
+      .attr("first-name", first)
+      .attr("last-name", last);
+}
+```
+然后调用：  
+```
+d3.selectAll("div").call(name, "John", "Snow");
+```
+与下面结果相同：  
+```
+name(d3.selectAll("div"), "John", "Snow");
+```
+唯一的区别是selection.call为了支持链式调用会返回selection，而不是name的返回值。  
+###  selection.empty() 
+如果selection不包含元素，返回true  
+###  selection.nodes() 
+返回选择器中所有元素  
+### selection.node()
+返回选择器第一个非空节点  
+### selection.size() 
+返回选择器中节点的数量  
+
+## 局部变量
+d3 local允许你定义独立于数据的状态，例如在渲染时间序列时，您可能需要使用相同的x比例尺以及不同的y比例尺
+### d3.local() 
+声明一个新的局部变量  
+```
+const foo = d3.local();
+```
+与var相同的是每一个local是唯一的，不同的是local的范围由DOM确定。  
+### local.set(node, value) 
+给该local设置值，并返回value：  
+```
+selection.each(function(d) { foo.set(this, d.value); });
+```
+如果只添加了一个变量，也可以这样：  
+```
+selection.property(foo, d => d.value);
+```
+从这就可以看出，我们可以给元素添加多个local。  
+### local.get(node)  
+返回节点上的local值,如果未定义local返回最近祖先上的值，没有返回undefined。  
+### local.remove(node)  
+删除该节点上的local值，如果删除之前定义了local则返回true，该节点没有local返回false，祖先上的local不受影响，因此local.get仍返回值。  
+### local.toString()  
+返回local自动生成标识符，类似于一个识别码用来唯一之别nodelocal上的value的值，换可以通过element[local]\(这里是因为local也是个对象，传入时会自动去调用toString\)或者selection.property来设置或获取local的value。
+源代码：  
+```
+var nextId=0;
+export default function local() {
+    return new Local;
+}
+
+function Local() {
+    this._="@"+(++nextId).toString(36);
+    //Number.prototype.toString([radix])中的
+    // radix 指定要用于数字到字符串的转换的基数(从2到36)。
+    // 如果未指定 radix 参数，则默认值为 10。所有不在范围内的基数会报错
+}
+Local.prototype=local.prototype={
+    constructor:Local,
+    get:function (node) {
+        var id=this._;
+        while(!(id in node)) if (!(node=node.parentNode)) return;
+        return node[id];
+    },
+    set:function (node,value) {
+        return node[this._]=value;
+    },
+    remove:function (node) {
+        return this._ in node && delete node[this._];
+    },
+    toString: function () {
+        return this._;
+    }
+}
+```
+总之local方便用户在局部范围进行操作，这个范围指元素节点，实现原理就是给节点添加属性，为了名字不重复定义了一个自动生成的标识符this.\_来取得唯一的名字，并把他们统一到一个对象Local中。  
+# 总结
+selection的事件处理，最核心的是on方法，灵活多变的事件添加，其次就是用户自定义事件的customEvent和触发dispatch，对于在svg画图的情况下，我们非常有必有知道的是触发事件相对于svg下的坐标，mouse、touch、touches、clienPoint解决了这个问题。
+对于控制流中的函数，是作者在完成整个selection模块时产生的一些中间组件，作者把他们抽象出来，可以让用户在使用时更加便利。  
+对于局部变量部分，local的定义就是一个对selection局部进行操作的变量。  
+到这里就把selection模块的内容分4篇文章说完了，其中最主要的还是数据绑定部分，这也是d3数据驱动的最大的特色，算是d3js的核心了。然后目前为止完成了3个模块的源码解析，任重而道远啊！
+# 深度阅读：  
+源码及解析：https://github.com/dongoa/evs-selection  
+MouseEvent.relatedTarget事件属性：https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/relatedTarget  
+timeStamp 事件属性：https://www.w3cschool.cn/jsref/event-timestamp.html   
+CustomEvent自定义事件：https://www.jianshu.com/p/1cf1c80c0586  
+changedTouches:https://www.cnblogs.com/mengff/p/6005516.html  
+SVGElement:https://developer.mozilla.org/zh-CN/docs/Web/API/SVGElement  
+SVG窗口坐标系的转换：http://blog.iderzheng.com/something-about-svg-with-javascript/  
+offsetLeft,Left,clientLeft的区别:https://www.cnblogs.com/panjun-Donet/articles/1294033.html  
+changedTouches：https://segmentfault.com/q/1010000002870710  
+TouchEvent:https://developer.apple.com/documentation/webkitjs/touchevent#//apple_ref/javascript/instp/TouchEvent/changedTouches  
